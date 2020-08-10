@@ -16,14 +16,15 @@ from .logger import logger
 from .utils import (
     check_init, pull_server_data, is_connected,
     get_servers, get_server_value, get_config_value,
-    set_config_value, get_ip_info, get_country_name,
-    get_fastest_server, check_update, get_default_nic,
-    get_transferred_data, create_openvpn_config,
-    is_ipv6_disabled
+    set_config_value, delete_config_value, get_ip_info,
+    get_country_name, get_fastest_server, check_update,
+    get_default_nic, get_default_gateway, get_local_network,
+    get_transferred_data, create_openvpn_config, is_ipv6_disabled,
+    is_valid_ip
 )
 # Constants
 from .constants import (
-    CONFIG_DIR, OVPN_FILE, PASSFILE, CONFIG_FILE
+    CONFIG_DIR, OVPN_FILE, PASSFILE, CONFIG_FILE, SPLIT_TUNNEL_FILE
 )
 
 
@@ -497,8 +498,7 @@ def openvpn_connect(servername, protocol):
                         "[!] Make sure you are protected!"
                     )
                 manage_ipv6("disable")
-                manage_killswitch("enable", proto=protocol.lower(),
-                                  port=port[protocol.lower()])
+                manage_killswitch("enable")
                 new_ip, _ = get_ip_info()
                 if old_ip == new_ip:
                     logger.debug("Failed to connect. IP didn't change")
@@ -761,28 +761,39 @@ def manage_ipv6(mode):
                         "Mode must be 'disable' or 'restore'")
 
 
-def manage_killswitch(mode, proto=None, port=None):
+def manage_killswitch(mode):
     """
     Disable and enable the VPN Kill Switch.
 
-    The Kill Switch creates IPTables rules that only allow connections to go
-    through the OpenVPN device. If the OpenVPN process stops for some unknown
+    The Kill Switch creates and removes routes that only allow connections to go
+    through the OpenVPN connection. If the OpenVPN process stops for some unknown
     reason this will completely block access to the internet.
     """
 
-    backupfile = os.path.join(CONFIG_DIR, "iptables.backup")
-
     if mode == "restore":
-        logger.debug("Restoring iptables")
-        if os.path.isfile(backupfile):
-            logger.debug("Restoring IPTables rules")
-            subprocess.run("iptables-restore < {0}".format(backupfile),
-                           shell=True, stdout=subprocess.PIPE)
-            logger.debug("iptables restored")
-            os.remove(backupfile)
-            logger.debug("iptables.backup removed")
-        else:
-            logger.debug("No Backupfile found")
+        logger.debug("Restoring routes")
+
+        try:
+            default_gw = get_config_value("metadata", "default_gw")
+            default_nic = get_config_value("metadata", "default_nic")
+            local_network = get_config_value("metadata", "local_network")
+
+            logger.debug("Adding back default route {0}".format(default_gw))
+            subprocess.run(["route", "add", "default", "gw", default_gw, "dev", default_nic], stderr=subprocess.DEVNULL)
+
+            if int(get_config_value("USER", "killswitch")) == 1:
+                logger.debug("Allowing communication to local network {0} directly".format(local_network))
+                subprocess.run(["route", "add", "-net", local_network, "dev", default_nic], stderr=subprocess.DEVNULL)
+
+                logger.debug("Removing special default gateway route {0}".format(default_gw))
+                subprocess.run(["route", "del", "-host", default_gw], stderr=subprocess.DEVNULL)
+
+            delete_config_value("metadata", "default_gw")
+            delete_config_value("metadata", "default_nic")
+            delete_config_value("metadata", "local_network")
+        except KeyError:
+            logger.debug("No metadata available to restore from killswitch")
+
         return
 
     # Stop if Kill Switch is disabled
@@ -790,71 +801,49 @@ def manage_killswitch(mode, proto=None, port=None):
         return
 
     if mode == "enable":
-        if os.path.isfile(backupfile):
-            logger.debug("Kill Switch backup exists")
-            manage_killswitch("restore")
+        default_gw = get_default_gateway()
+        default_nic = get_default_nic()
+        local_network = get_local_network()
 
-        with open(os.path.join(CONFIG_DIR, "ovpn.log"), "r") as f:
-            content = f.read()
-            device = re.search(r"(TUN\/TAP device) (.+) opened", content)
-            if not device:
-                print("[!] Kill Switch activation failed."
-                      "Device couldn't be determined.")
-                logger.debug(
-                    "Kill Switch activation failed. No device in logfile"
-                )
-            device = device.group(2)
+        set_config_value("metadata", "default_gw", default_gw)
+        set_config_value("metadata", "default_nic", default_nic)
+        set_config_value("metadata", "local_network", local_network)
 
-        # Backing up IPTables rules
-        logger.debug("Backing up iptables rules")
-        iptables_rules = subprocess.run(["iptables-save"],
-                                        stdout=subprocess.PIPE)
+        # Split Tunneling
+        if get_config_value("USER", "split_tunnel", "0") == "1":
+            with open(SPLIT_TUNNEL_FILE, "r") as f:
+                for line in f:
+                    network = line.strip()
+                    if not is_valid_ip(network):
+                        logger.debug("[!] '{0}' is invalid. Skipped.".format(network))
+                        continue
+                    if "/" in network:
+                        logger.debug("Allowing network {0} to talk to the gateway directly".format(network))
+                        subprocess.run(
+                            ["route", "add", "-net", network, "gw", default_gw, "dev", default_nic],
+                            stderr=subprocess.DEVNULL
+                        )
+                    else:
+                        logger.debug("Allowing host {0} to talk to the gateway directly".format(network))
+                        subprocess.run(
+                            ["route", "add", "-host", network, "gw", default_gw, "dev", default_nic],
+                            stderr=subprocess.DEVNULL
+                        )
 
-        if "COMMIT" in iptables_rules.stdout.decode():
-            with open(backupfile, "wb") as f:
-                f.write(iptables_rules.stdout)
-        else:
-            with open(backupfile, "w") as f:
-                f.write("*filter\n")
-                f.write(":INPUT ACCEPT\n")
-                f.write(":FORWARD ACCEPT\n")
-                f.write(":OUTPUT ACCEPT\n")
-                f.write("COMMIT\n")
+        if default_gw is None:
+            if is_connected():
+                logger.debug("Kill Switch already active")
+            else:
+                logger.debug("No default gateway found, unable to activate kill switch")
+            return
 
-        # Creating Kill Switch rules
-        iptables_commands = [
-            "iptables -F",
-            "iptables -P INPUT DROP",
-            "iptables -P OUTPUT DROP",
-            "iptables -P FORWARD DROP",
-            "iptables -A OUTPUT -o lo -j ACCEPT",
-            "iptables -A INPUT -i lo -j ACCEPT",
-            "iptables -A OUTPUT -o {0} -j ACCEPT".format(device),
-            "iptables -A INPUT -i {0} -j ACCEPT".format(device),
-            "iptables -A OUTPUT -o {0} -m state --state ESTABLISHED,RELATED -j ACCEPT".format(device), # noqa
-            "iptables -A INPUT -i {0} -m state --state ESTABLISHED,RELATED -j ACCEPT".format(device), # noqa
-            "iptables -A OUTPUT -p {0} -m {1} --dport {2} -j ACCEPT".format(proto.lower(), proto.lower(), port), # noqa
-            "iptables -A INPUT -p {0} -m {1} --sport {2} -j ACCEPT".format(proto.lower(), proto.lower(), port), # noqa
-        ]
+        if int(get_config_value("USER", "killswitch")) == 1:
+            logger.debug("Allowing communication to default gateway {0} directly".format(default_gw))
+            subprocess.run(["route", "add", "-host", default_gw, "dev", default_nic], stderr=subprocess.DEVNULL)
 
-        if int(get_config_value("USER", "killswitch")) == 2:
-            # Getting local network information
-            default_nic = get_default_nic()
-            local_network = subprocess.run(
-                "ip addr show {0} | grep inet".format(default_nic),
-                stdout=subprocess.PIPE, shell=True
-            )
-            local_network = local_network.stdout.decode().strip().split()[1]
+            logger.debug("Preventing local network {0} from bypassing VPN".format(local_network))
+            subprocess.run(["route", "del", "-net", local_network], stderr=subprocess.DEVNULL)
 
-            exclude_lan_commands = [
-                "iptables -A OUTPUT -o {0} -d {1} -j ACCEPT".format(default_nic, local_network), # noqa
-                "iptables -A INPUT -i {0} -s {1} -j ACCEPT".format(default_nic, local_network), # noqa
-            ]
-
-            for lan_command in exclude_lan_commands:
-                iptables_commands.append(lan_command)
-
-        for command in iptables_commands:
-            command = command.split()
-            subprocess.run(command)
+        logger.debug("Deleting the default gateway")
+        subprocess.run(["route", "del", "default"], stderr=subprocess.DEVNULL)
         logger.debug("Kill Switch enabled")
