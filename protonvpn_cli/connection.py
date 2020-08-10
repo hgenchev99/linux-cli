@@ -813,20 +813,24 @@ def manage_killswitch(mode):
         if get_config_value("USER", "split_tunnel", "0") == "1":
             with open(SPLIT_TUNNEL_FILE, "r") as f:
                 for line in f:
-                    network = line.strip()
-                    if not is_valid_ip(network):
-                        logger.debug("[!] '{0}' is invalid. Skipped.".format(network))
+                    ip = line.strip()
+                    if not is_valid_ip(ip):
+                        logger.debug("[!] '{0}' is invalid. Skipped.".format(ip))
                         continue
-                    if "/" in network:
+                    if "/" in ip:
+                        network = ip
                         logger.debug("Allowing network {0} to talk to the gateway directly".format(network))
+                        print("[*] Warning: Allowing network {0} to talk to the gateway directly".format(network))
                         subprocess.run(
                             ["route", "add", "-net", network, "gw", default_gw, "dev", default_nic],
                             stderr=subprocess.DEVNULL
                         )
                     else:
-                        logger.debug("Allowing host {0} to talk to the gateway directly".format(network))
+                        host = ip
+                        logger.debug("Allowing host {0} to talk to the gateway directly".format(host))
+                        print("[*] Warning: Allowing host {0} to talk to the gateway directly".format(host))
                         subprocess.run(
-                            ["route", "add", "-host", network, "gw", default_gw, "dev", default_nic],
+                            ["route", "add", "-host", host, "gw", default_gw, "dev", default_nic],
                             stderr=subprocess.DEVNULL
                         )
 
