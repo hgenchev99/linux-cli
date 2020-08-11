@@ -20,11 +20,12 @@ from .utils import (
     get_country_name, get_fastest_server, check_update,
     get_default_nic, get_default_gateway, get_local_network,
     get_transferred_data, create_openvpn_config, is_ipv6_disabled,
-    is_valid_ip
+    add_network_route, delete_network_route, add_host_route,
+    delete_host_route
 )
 # Constants
 from .constants import (
-    CONFIG_DIR, OVPN_FILE, PASSFILE, CONFIG_FILE, SPLIT_TUNNEL_FILE
+    CONFIG_DIR, OVPN_FILE, PASSFILE, CONFIG_FILE
 )
 
 
@@ -779,14 +780,14 @@ def manage_killswitch(mode):
             local_network = get_config_value("metadata", "local_network")
 
             logger.debug("Adding back default route {0}".format(default_gw))
-            subprocess.run(["route", "add", "default", "gw", default_gw, "dev", default_nic], stderr=subprocess.DEVNULL)
+            add_network_route("default", gateway=default_gw, device=default_nic)
 
             if int(get_config_value("USER", "killswitch")) == 1:
                 logger.debug("Allowing communication to local network {0} directly".format(local_network))
-                subprocess.run(["route", "add", "-net", local_network, "dev", default_nic], stderr=subprocess.DEVNULL)
+                add_network_route(local_network, device=default_nic)
 
                 logger.debug("Removing special default gateway route {0}".format(default_gw))
-                subprocess.run(["route", "del", "-host", default_gw], stderr=subprocess.DEVNULL)
+                delete_host_route(default_gw)
 
             delete_config_value("metadata", "default_gw")
             delete_config_value("metadata", "default_nic")
@@ -809,31 +810,6 @@ def manage_killswitch(mode):
         set_config_value("metadata", "default_nic", default_nic)
         set_config_value("metadata", "local_network", local_network)
 
-        # Split Tunneling
-        if get_config_value("USER", "split_tunnel", "0") == "1":
-            with open(SPLIT_TUNNEL_FILE, "r") as f:
-                for line in f:
-                    ip = line.strip()
-                    if not is_valid_ip(ip):
-                        logger.debug("[!] '{0}' is invalid. Skipped.".format(ip))
-                        continue
-                    if "/" in ip:
-                        network = ip
-                        logger.debug("Allowing network {0} to talk to the gateway directly".format(network))
-                        print("[*] Warning: Allowing network {0} to talk to the gateway directly".format(network))
-                        subprocess.run(
-                            ["route", "add", "-net", network, "gw", default_gw, "dev", default_nic],
-                            stderr=subprocess.DEVNULL
-                        )
-                    else:
-                        host = ip
-                        logger.debug("Allowing host {0} to talk to the gateway directly".format(host))
-                        print("[*] Warning: Allowing host {0} to talk to the gateway directly".format(host))
-                        subprocess.run(
-                            ["route", "add", "-host", host, "gw", default_gw, "dev", default_nic],
-                            stderr=subprocess.DEVNULL
-                        )
-
         if default_gw is None:
             if is_connected():
                 logger.debug("Kill Switch already active")
@@ -843,11 +819,11 @@ def manage_killswitch(mode):
 
         if int(get_config_value("USER", "killswitch")) == 1:
             logger.debug("Allowing communication to default gateway {0} directly".format(default_gw))
-            subprocess.run(["route", "add", "-host", default_gw, "dev", default_nic], stderr=subprocess.DEVNULL)
+            add_host_route(default_gw, device=default_nic)
 
             logger.debug("Preventing local network {0} from bypassing VPN".format(local_network))
-            subprocess.run(["route", "del", "-net", local_network], stderr=subprocess.DEVNULL)
+            delete_network_route(local_network)
 
         logger.debug("Deleting the default gateway")
-        subprocess.run(["route", "del", "default"], stderr=subprocess.DEVNULL)
+        delete_network_route("default")
         logger.debug("Kill Switch enabled")

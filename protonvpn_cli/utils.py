@@ -556,3 +556,39 @@ def get_transferred_data():
         rx_bytes = int(f.read())
 
     return convert_size(tx_bytes), convert_size(rx_bytes)
+
+
+def add_network_route(network, gateway=None, device=None):
+    command = ["route", "add", "-net", network]
+    if gateway is not None:
+        command.extend(["gw", gateway])
+    if device is not None:
+        command.extend(["dev", device])
+    subprocess.run(command, stderr=subprocess.DEVNULL)
+
+
+def delete_network_route(network, gateway=None, device=None):
+    command = ["route", "del", "-net", network]
+    if gateway is not None:
+        command.extend(["gw", gateway])
+    if device is not None:
+        command.extend(["dev", device])
+    subprocess.run(command, stderr=subprocess.DEVNULL)
+
+
+def add_host_route(host, gateway=None, device=None):
+    command = ["route", "add", "-host", host]
+    if gateway is not None:
+        command.extend(["gw", gateway])
+    if device is not None:
+        command.extend(["dev", device])
+    subprocess.run(command, stderr=subprocess.DEVNULL)
+
+
+def delete_host_route(host, gateway=None, device=None):
+    command = ["route", "del", "-host", host]
+    if gateway is not None:
+        command.extend(["gw", gateway])
+    if device is not None:
+        command.extend(["dev", device])
+    subprocess.run(command, stderr=subprocess.DEVNULL)
