@@ -115,12 +115,15 @@ def get_server_value(servername, key, servers):
     return value[0]
 
 
-def get_config_value(group, key):
+def get_config_value(group, key, default=None):
     """Return specific value from CONFIG_FILE as string"""
     config = configparser.ConfigParser()
     config.read(CONFIG_FILE)
 
-    return config[group][key]
+    if default is not None:
+        return config[group].get(key, default)
+    else:
+        return config[group][key]
 
 
 def set_config_value(group, key, value):
@@ -132,6 +135,21 @@ def set_config_value(group, key, value):
 
     logger.debug(
         "Writing {0} to [{1}] in config file".format(key, group)
+    )
+
+    with open(CONFIG_FILE, "w+") as f:
+        config.write(f)
+
+
+def delete_config_value(group, key):
+    """Delete a specific value from CONFIG_FILE"""
+
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    config[group].pop(key)
+
+    logger.debug(
+        "Deleting {0} from [{1}] in config file".format(key, group)
     )
 
     with open(CONFIG_FILE, "w+") as f:
@@ -177,13 +195,36 @@ def get_fastest_server(server_pool):
 def get_default_nic():
     """Find and return the default network interface"""
     default_route = subprocess.run(
-        "ip route show | grep default",
+        "ip route show default",
         stdout=subprocess.PIPE, shell=True
     )
 
     # Get the default nic from ip route show output
     default_nic = default_route.stdout.decode().strip().split()[4]
     return default_nic
+
+
+def get_default_gateway():
+    """Find and return the default gateway ip address"""
+    default_route = subprocess.run(
+        "ip route show default",
+        stdout=subprocess.PIPE, shell=True
+    )
+
+    # Get the default gateway from ip route show output
+    default_gw = default_route.stdout.decode().strip().split()[2]
+    return default_gw
+
+
+def get_local_network():
+    default_nic = get_default_nic()
+    local_network = subprocess.run(
+        "ip addr show {0} | grep inet".format(default_nic),
+        stdout=subprocess.PIPE, shell=True
+    )
+    local_ip_network = local_network.stdout.decode().strip().split()[1]
+    local_network = str(ipaddress.ip_network(local_ip_network, strict=False))
+    return local_network
 
 
 def is_connected():
@@ -265,13 +306,7 @@ def create_openvpn_config(serverlist, protocol, ports):
     """
 
     # Split Tunneling
-    try:
-        if get_config_value("USER", "split_tunnel") == "1":
-            split = True
-        else:
-            split = False
-    except KeyError:
-        split = False
+    split = bool(get_config_value("USER", "split_tunnel", "0") == "1")
 
     ip_nm_pairs = []
 
@@ -521,3 +556,39 @@ def get_transferred_data():
         rx_bytes = int(f.read())
 
     return convert_size(tx_bytes), convert_size(rx_bytes)
+
+
+def add_network_route(network, gateway=None, device=None):
+    command = ["route", "add", "-net", network]
+    if gateway is not None:
+        command.extend(["gw", gateway])
+    if device is not None:
+        command.extend(["dev", device])
+    subprocess.run(command, stderr=subprocess.DEVNULL)
+
+
+def delete_network_route(network, gateway=None, device=None):
+    command = ["route", "del", "-net", network]
+    if gateway is not None:
+        command.extend(["gw", gateway])
+    if device is not None:
+        command.extend(["dev", device])
+    subprocess.run(command, stderr=subprocess.DEVNULL)
+
+
+def add_host_route(host, gateway=None, device=None):
+    command = ["route", "add", "-host", host]
+    if gateway is not None:
+        command.extend(["gw", gateway])
+    if device is not None:
+        command.extend(["dev", device])
+    subprocess.run(command, stderr=subprocess.DEVNULL)
+
+
+def delete_host_route(host, gateway=None, device=None):
+    command = ["route", "del", "-host", host]
+    if gateway is not None:
+        command.extend(["gw", gateway])
+    if device is not None:
+        command.extend(["dev", device])
+    subprocess.run(command, stderr=subprocess.DEVNULL)
