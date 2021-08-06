@@ -398,7 +398,7 @@ def status():
     ip, isp = get_ip_info()
 
     # Collect Information
-    all_features = {0: "Normal", 1: "Secure-Core", 2: "Tor", 4: "P2P"}
+    all_features = {0: "Normal", 1: "Secure-Core", 2: "Tor", 4: "P2P", 8: "Streaming", 16: "IPv6"}
 
     logger.debug("Collecting status information")
     country_code = get_server_value(connected_server, "ExitCountry", servers)
