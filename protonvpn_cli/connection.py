@@ -427,7 +427,7 @@ def status():
         + "Time:         {0}\n".format(connection_time)
         + "IP:           {0}\n".format(ip)
         + "Server:       {0}\n".format(connected_server)
-        + "Features:     {0}\n".format(all_features[feature])
+        + "Features:     {0}\n".format(all_features.get(feature, feature))
         + "Protocol:     {0}\n".format(connected_protocol.upper())
         + "Kill Switch:  {0}\n".format(killswitch_status)
         + "Country:      {0}\n".format(country)
